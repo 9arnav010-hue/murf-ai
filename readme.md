@@ -74,16 +74,19 @@ To runthisagent,youwillneed APIkeysand configurationfor thecoreservices.
 > 1\. Clonetherepository:
 >
 > git clone\[repository-url\]
+> 
+>2\. Make a folder named 'src' and put App.jsk , index.css and main.jsx in it
+> 
+> 3\. Navigateto theproject directory: cd \[project-folder\]
 >
-> 2\. Navigateto theproject directory: cd \[project-folder\]
+> 4\. InstallNodedependencies: npminstall
 >
-> 3\. InstallNodedependencies: npminstall
->
-> 4\. Configureyour environment variables(.envfile) withyour APIkeys:
+> 5\. Configureyour environment variables(.envfile) withyour APIkeys:
 > GROQ_API_KEY="your_groq_api_key_here"
 > MURF_API_KEY="your_murf_api_key_here"
 >
-> 5\. Runtheapplicationlocally: npmrundev
+> 6\. Runtheapplicationlocally: npmrundev
 
 Theapplicationshould now berunning and accessible,ready to
 demonstrateultra-low-latency voice interaction.
+
