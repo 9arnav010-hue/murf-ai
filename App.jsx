@@ -1,18 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Volume2, Moon, Sun, AlertCircle, Check } from 'lucide-react';
-
-async function runQuery() {
-  const response = await fetch('/api/query', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: "Hello GROQ AI!" }),
-  });
-
-  const data = await response.json();
-  console.log(data);
-}
-
-
+import { Mic, MicOff, Volume2, Moon, Sun, Square, X } from 'lucide-react';
 
 export default function VoiceAgent() {
   const [isListening, setIsListening] = useState(false);
@@ -23,14 +10,12 @@ export default function VoiceAgent() {
   const [conversationHistory, setConversationHistory] = useState([]);
   const [darkMode, setDarkMode] = useState(false);
   const [continuousMode, setContinuousMode] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   
   // API Keys from environment variables
   const apiKeys = {
     deepgram: import.meta.env.VITE_DEEPGRAM_API_KEY || '',
-    anthropic: import.meta.env.VITE_ANTHROPIC_API_KEY || '',
     groq: import.meta.env.VITE_GROQ_API_KEY || '',
-    gemini: import.meta.env.VITE_GEMINI_API_KEY || '',
-    openai: import.meta.env.VITE_OPENAI_API_KEY || '',
     murf: import.meta.env.VITE_MURF_API_KEY || ''
   };
 
@@ -38,24 +23,37 @@ export default function VoiceAgent() {
   const audioChunksRef = useRef([]);
   const recognitionRef = useRef(null);
   const inputRef = useRef(null);
-
-  // Determine which AI API to use
-  const getActiveAIProvider = () => {
-    if (apiKeys.groq) return 'groq';
-    if (apiKeys.gemini) return 'gemini';
-    if (apiKeys.openai) return 'openai';
-    if (apiKeys.anthropic) return 'anthropic';
-    return null;
-  };
+  const abortControllerRef = useRef(null);
+  const audioRef = useRef(null); // For Murf audio playback
 
   // Check API configuration on mount
   useEffect(() => {
-    const provider = getActiveAIProvider();
-    if (!provider) {
-      setStatus('⚠️ No AI API key configured');
+    if (!apiKeys.groq) {
+      setStatus('⚠️ Groq API key not configured');
+    } else if (apiKeys.murf) {
+      setStatus('Ready (GROQ + MURF Voice)');
     } else {
-      setStatus(`Ready (${provider.toUpperCase()})`);
+      setStatus('Ready (GROQ)');
     }
+  }, []);
+
+  // Cleanup speech on unmount or page refresh
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      handleBeforeUnload();
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
   }, []);
 
   // Initialize Web Speech API
@@ -91,12 +89,29 @@ export default function VoiceAgent() {
 
   // Auto-focus input after speaking ends in continuous mode
   useEffect(() => {
-    if (!isSpeaking && continuousMode && inputRef.current) {
+    if (!isSpeaking && !isGenerating && continuousMode && inputRef.current) {
       setTimeout(() => {
         inputRef.current.focus();
       }, 500);
     }
-  }, [isSpeaking, continuousMode]);
+  }, [isSpeaking, isGenerating, continuousMode]);
+
+  const stopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setIsGenerating(false);
+    setStatus('Generation stopped');
+    setTimeout(() => setStatus('Ready (GROQ)'), 2000);
+  };
+
+  const stopSpeaking = () => {
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeaking(false);
+    setStatus('Ready (GROQ)');
+  };
 
   const toggleListening = () => {
     if (isListening) {
@@ -179,22 +194,6 @@ export default function VoiceAgent() {
     }
   };
 
-  const abortControllerRef = useRef(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-
-  const stopGeneration = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    if (window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
-    }
-    setIsGenerating(false);
-    setIsSpeaking(false);
-    const provider = getActiveAIProvider();
-    setStatus(provider ? `Ready (${provider.toUpperCase()})` : 'Ready');
-  };
-
   const handleTranscriptComplete = async (text) => {
     if (!text.trim()) {
       setStatus('No speech detected');
@@ -219,39 +218,34 @@ export default function VoiceAgent() {
     }
     
     setIsGenerating(false);
-    const provider = getActiveAIProvider();
-    setStatus(provider ? `Ready (${provider.toUpperCase()})` : 'Ready');
+    setStatus('Ready (GROQ)');
   };
 
   const getAIResponse = async (userMessage, history, signal) => {
-    const provider = getActiveAIProvider();
-    
-    if (!provider) {
-      setStatus('No AI API key configured');
-      return 'Please configure an AI API key in the .env file.';
+    if (!apiKeys.groq) {
+      setStatus('Groq API key not configured');
+      return 'Please configure your Groq API key in the .env file.';
     }
 
     try {
-      // Add instruction for formatted responses
-      const systemPrompt = "Format your responses with proper structure using headings, bullet points, and numbered lists where appropriate. Make responses clear and organized.";
-      const enhancedHistory = [
-        { role: 'user', content: systemPrompt },
-        { role: 'assistant', content: 'I understand. I will format my responses with clear structure using headings, bullets, and numbers.' },
-        ...history
-      ];
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKeys.groq}`
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: history,
+          temperature: 0.7,
+          max_tokens: 1024
+        }),
+        signal
+      });
 
-      switch (provider) {
-        case 'groq':
-          return await getGroqResponse(userMessage, enhancedHistory, signal);
-        case 'gemini':
-          return await getGeminiResponse(userMessage, enhancedHistory, signal);
-        case 'openai':
-          return await getOpenAIResponse(userMessage, enhancedHistory, signal);
-        case 'anthropic':
-          return await getAnthropicResponse(userMessage, enhancedHistory, signal);
-        default:
-          return 'No AI provider configured.';
-      }
+      if (!response.ok) throw new Error(`Groq API Error: ${response.status}`);
+      const data = await response.json();
+      return data.choices[0].message.content;
     } catch (error) {
       if (error.name === 'AbortError') {
         return null;
@@ -262,100 +256,18 @@ export default function VoiceAgent() {
     }
   };
 
-  const getGroqResponse = async (userMessage, history, signal) => {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKeys.groq}`
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: history,
-        temperature: 0.7,
-        max_tokens: 1024
-      }),
-      signal
-    });
-
-    if (!response.ok) throw new Error(`Groq API Error: ${response.status}`);
-    const data = await response.json();
-    return data.choices[0].message.content;
-  };
-
-  const getGeminiResponse = async (userMessage, history, signal) => {
-    const formattedHistory = history.map(msg => ({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }]
-    }));
-
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKeys.gemini}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: formattedHistory
-      }),
-      signal
-    });
-
-    if (!response.ok) throw new Error(`Gemini API Error: ${response.status}`);
-    const data = await response.json();
-    return data.candidates[0].content.parts[0].text;
-  };
-
-  const getOpenAIResponse = async (userMessage, history, signal) => {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKeys.openai}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: history,
-        temperature: 0.7,
-        max_tokens: 1024
-      }),
-      signal
-    });
-
-    if (!response.ok) throw new Error(`OpenAI API Error: ${response.status}`);
-    const data = await response.json();
-    return data.choices[0].message.content;
-  };
-
-  const getAnthropicResponse = async (userMessage, history, signal) => {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKeys.anthropic,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
-        messages: history
-      }),
-      signal
-    });
-
-    if (!response.ok) throw new Error(`Anthropic API Error: ${response.status}`);
-    const data = await response.json();
-    return data.content[0].text;
-  };
-
   const speakResponse = async (text) => {
     setIsSpeaking(true);
+    setStatus('Speaking...');
     
     try {
+      // Always try Murf first if API key is available
       if (apiKeys.murf) {
-        await speakWithMurf(text);
-      } else {
-        speakWithWebAPI(text);
+        const success = await speakWithMurf(text);
+        if (success) return;
       }
+      // Fallback to Web Speech API
+      speakWithWebAPI(text);
     } catch (error) {
       console.error('Speech error:', error);
       setStatus('Error speaking response');
@@ -375,9 +287,15 @@ export default function VoiceAgent() {
           text: text,
           voiceId: 'en-US-sara',
           format: 'mp3',
-          speed: 1.0
+          speed: 0.9,
+          pitch: 0
         })
       });
+
+      if (!response.ok) {
+        console.warn('Murf API failed, falling back to Web Speech API');
+        return false;
+      }
 
       const audioBlob = await response.blob();
       const audioUrl = URL.createObjectURL(audioBlob);
@@ -385,34 +303,45 @@ export default function VoiceAgent() {
       
       audio.onended = () => {
         setIsSpeaking(false);
+        setStatus('Ready (GROQ)');
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        setStatus('Ready (GROQ)');
         URL.revokeObjectURL(audioUrl);
       };
       
       await audio.play();
+      return true;
     } catch (error) {
       console.error('Murf API error:', error);
-      speakWithWebAPI(text);
+      return false;
     }
   };
 
   const speakWithWebAPI = (text) => {
     if ('speechSynthesis' in window) {
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.9; // Slightly slower
-      utterance.pitch = 0.95; // Slightly softer
-      utterance.volume = 0.8; // Softer volume
+      utterance.rate = 0.85; // Slower for softer sound
+      utterance.pitch = 0.9; // Lower pitch
+      utterance.volume = 0.75; // Softer volume
       
       utterance.onend = () => {
         setIsSpeaking(false);
+        setStatus('Ready (GROQ)');
       };
       
       utterance.onerror = () => {
         setIsSpeaking(false);
+        setStatus('Ready (GROQ)');
       };
       
       window.speechSynthesis.speak(utterance);
     } else {
       setIsSpeaking(false);
+      setStatus('Ready (GROQ)');
     }
   };
 
@@ -420,19 +349,16 @@ export default function VoiceAgent() {
     setConversationHistory([]);
     setTranscript('');
     setResponse('');
-    const provider = getActiveAIProvider();
-    setStatus(provider ? `Ready (${provider.toUpperCase()})` : 'Ready');
+    setStatus('Ready (GROQ)');
   };
 
   const formatText = (text) => {
-    // Split text into lines
     const lines = text.split('\n');
     
     return lines.map((line, idx) => {
       const trimmed = line.trim();
       if (!trimmed) return <br key={idx} />;
       
-      // Headings (lines with # or lines ending with :)
       if (trimmed.startsWith('#')) {
         const level = trimmed.match(/^#+/)[0].length;
         const content = trimmed.replace(/^#+\s*/, '');
@@ -446,7 +372,6 @@ export default function VoiceAgent() {
         return <div key={idx} className="font-bold mt-3 mb-1">{trimmed}</div>;
       }
       
-      // Numbered lists
       if (/^\d+\./.test(trimmed)) {
         return (
           <div key={idx} className="ml-4 mb-1 flex gap-2">
@@ -456,7 +381,6 @@ export default function VoiceAgent() {
         );
       }
       
-      // Bullet points
       if (trimmed.startsWith('•') || trimmed.startsWith('-') || trimmed.startsWith('*')) {
         return (
           <div key={idx} className="ml-4 mb-1 flex gap-2">
@@ -466,7 +390,6 @@ export default function VoiceAgent() {
         );
       }
       
-      // Bold text (**text** or __text__)
       const boldRegex = /(\*\*|__)(.*?)\1/g;
       if (boldRegex.test(trimmed)) {
         const parts = trimmed.split(boldRegex);
@@ -483,7 +406,6 @@ export default function VoiceAgent() {
         );
       }
       
-      // Regular paragraph
       return <div key={idx} className="mb-2">{trimmed}</div>;
     });
   };
@@ -505,10 +427,32 @@ export default function VoiceAgent() {
                 Voice Agent
               </h1>
               <p className={`mt-1 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                Conversational AI Assistant
+                Powered by Groq AI
               </p>
             </div>
             <div className="flex items-center gap-3">
+              {/* Stop Generation Button */}
+              {isGenerating && (
+                <button
+                  onClick={stopGeneration}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                >
+                  <Square className="w-4 h-4" />
+                  Stop
+                </button>
+              )}
+              
+              {/* Stop Speaking Button */}
+              {isSpeaking && (
+                <button
+                  onClick={stopSpeaking}
+                  className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                  Stop Speaking
+                </button>
+              )}
+              
               {/* Continuous Mode Toggle */}
               <button
                 onClick={() => setContinuousMode(!continuousMode)}
@@ -544,6 +488,7 @@ export default function VoiceAgent() {
             <div className={`w-2 h-2 rounded-full ${
               isListening ? 'bg-red-500 animate-pulse' : 
               isSpeaking ? 'bg-blue-500 animate-pulse' : 
+              isGenerating ? 'bg-yellow-500 animate-pulse' :
               'bg-green-500'
             }`} />
             <span className={`font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
@@ -560,11 +505,11 @@ export default function VoiceAgent() {
           <div className="flex justify-center mb-8">
             <button
               onClick={toggleListening}
-              disabled={isSpeaking}
+              disabled={isSpeaking || isGenerating}
               className={`w-32 h-32 rounded-full flex items-center justify-center transition-all transform hover:scale-105 active:scale-95 shadow-2xl ${
                 isListening
                   ? 'bg-red-500 hover:bg-red-600 animate-pulse'
-                  : isSpeaking
+                  : (isSpeaking || isGenerating)
                   ? 'bg-gray-400 cursor-not-allowed'
                   : 'bg-gradient-to-br from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700'
               }`}
@@ -583,6 +528,8 @@ export default function VoiceAgent() {
               ? 'Listening... Speak now'
               : isSpeaking
               ? 'Speaking...'
+              : isGenerating
+              ? 'Generating response...'
               : 'Click the microphone to start talking or type below'}
           </p>
 
@@ -591,7 +538,7 @@ export default function VoiceAgent() {
             <label className={`block text-sm font-medium mb-2 ${
               darkMode ? 'text-gray-300' : 'text-gray-700'
             }`}>
-              Or Type Your Message:
+              Type Your Message:
             </label>
             <div className="flex gap-2">
               <input
@@ -609,7 +556,7 @@ export default function VoiceAgent() {
                     e.target.value = '';
                   }
                 }}
-                disabled={isListening || isSpeaking}
+                disabled={isListening || isSpeaking || isGenerating}
               />
               <button
                 onClick={(e) => {
@@ -619,43 +566,13 @@ export default function VoiceAgent() {
                     input.value = '';
                   }
                 }}
-                disabled={isListening || isSpeaking}
+                disabled={isListening || isSpeaking || isGenerating}
                 className="px-6 py-3 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
               >
                 Send
               </button>
             </div>
           </div>
-
-          {/* AI Response Display */}
-          {response && (
-            <div className={`mb-6 p-6 rounded-xl border-2 transition-colors ${
-              darkMode
-                ? 'bg-gray-700 border-indigo-500'
-                : 'bg-gradient-to-r from-purple-50 to-indigo-50 border-indigo-200'
-            }`}>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className={`text-lg font-bold ${
-                  darkMode ? 'text-indigo-300' : 'text-indigo-900'
-                }`}>
-                  AI Response:
-                </h3>
-                <button
-                  onClick={() => speakResponse(response)}
-                  disabled={isSpeaking}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:bg-gray-400 transition-colors"
-                >
-                  <Volume2 className="w-4 h-4" />
-                  {isSpeaking ? 'Speaking...' : 'Speak Again'}
-                </button>
-              </div>
-              <div className={`leading-relaxed ${
-                darkMode ? 'text-gray-200' : 'text-gray-800'
-              }`}>
-                {formatText(response)}
-              </div>
-            </div>
-          )}
 
           {/* Conversation Display */}
           <div className="space-y-4">
@@ -673,12 +590,12 @@ export default function VoiceAgent() {
                         msg.role === 'user'
                           ? 'bg-indigo-500 text-white'
                           : darkMode
-                          ? 'bg-gray-600 text-gray-100 shadow-md'
-                          : 'bg-white text-gray-800 shadow-md'
+                          ? 'bg-gradient-to-r from-purple-900 to-indigo-900 text-gray-100 shadow-md border-2 border-indigo-500'
+                          : 'bg-gradient-to-r from-purple-50 to-indigo-50 text-gray-800 shadow-md border-2 border-indigo-200'
                       }`}
                     >
                       <p className="text-sm font-medium mb-1 opacity-75">
-                        {msg.role === 'user' ? 'You' : 'Assistant'}
+                        {msg.role === 'user' ? 'You' : 'AI Assistant'}
                       </p>
                       <div>{formatText(msg.content)}</div>
                     </div>
@@ -735,7 +652,15 @@ export default function VoiceAgent() {
             </li>
             <li className="flex items-start gap-2">
               <span className="text-green-500 mt-1">✓</span>
-              <span>Formatted AI responses with headings, bullets, and numbers</span>
+              <span>High-quality voice synthesis with Murf AI (1M free characters)</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-green-500 mt-1">✓</span>
+              <span>Powered by Groq AI (FREE & Super Fast)</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-green-500 mt-1">✓</span>
+              <span>Manual stop controls for generation and speaking</span>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-green-500 mt-1">✓</span>
@@ -747,7 +672,7 @@ export default function VoiceAgent() {
             </li>
             <li className="flex items-start gap-2">
               <span className="text-green-500 mt-1">✓</span>
-              <span>Multiple AI providers supported (Groq, Gemini, OpenAI, Anthropic)</span>
+              <span>Secure API key management via environment variables</span>
             </li>
           </ul>
         </div>
