@@ -63,7 +63,7 @@ export default function VoiceAgent() {
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = false;
       recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
+      recognitionRef.current.lang = 'en-IN';
 
       recognitionRef.current.onresult = (event) => {
         const current = event.resultIndex;
@@ -106,11 +106,28 @@ export default function VoiceAgent() {
   };
 
   const stopSpeaking = () => {
+    // Stop Web Speech API
     if (window.speechSynthesis.speaking) {
       window.speechSynthesis.cancel();
     }
+    
+    // Stop Murf audio playback
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    
     setIsSpeaking(false);
     setStatus('Ready (GROQ)');
+  };
+
+  const toggleSpeaking = () => {
+    if (isSpeaking) {
+      stopSpeaking();
+    } else if (response) {
+      speakResponse(response);
+    }
   };
 
   const toggleListening = () => {
@@ -277,6 +294,7 @@ export default function VoiceAgent() {
 
   const speakWithMurf = async (text) => {
     try {
+      // Using Murf's Gen2 API endpoint
       const response = await fetch('https://api.murf.ai/v1/speech/generate', {
         method: 'POST',
         headers: {
@@ -284,33 +302,50 @@ export default function VoiceAgent() {
           'api-key': apiKeys.murf
         },
         body: JSON.stringify({
+          voiceId: 'en-IN-priya',  // Using a valid Gen2 voice ID
+          style: 'Conversational',
           text: text,
-          voiceId: 'en-US-sara',
-          format: 'mp3',
-          speed: 0.9,
-          pitch: 0
+          rate: 0,
+          pitch: 0,
+          sampleRate: 24000,
+          format: 'MP3',
+          channelType: 'MONO',
+          pronunciationDictionary: {},
+          encodeAsBase64: false,
+          variation: 1,
+          modelVersion: 'GEN2'
         })
       });
 
       if (!response.ok) {
-        console.warn('Murf API failed, falling back to Web Speech API');
+        const errorText = await response.text();
+        console.warn('Murf API failed:', response.status, errorText);
         return false;
       }
 
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
+      // Parse response
+      const data = await response.json();
+      
+      // Murf Gen2 returns audioFile URL
+      if (!data.audioFile) {
+        console.warn('No audio file in Murf response:', data);
+        return false;
+      }
+
+      const audio = new Audio(data.audioFile);
+      audioRef.current = audio;
       
       audio.onended = () => {
         setIsSpeaking(false);
         setStatus('Ready (GROQ)');
-        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
       };
       
-      audio.onerror = () => {
+      audio.onerror = (e) => {
+        console.error('Audio playback error:', e);
         setIsSpeaking(false);
         setStatus('Ready (GROQ)');
-        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
       };
       
       await audio.play();
@@ -438,18 +473,31 @@ export default function VoiceAgent() {
                   className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
                 >
                   <Square className="w-4 h-4" />
-                  Stop
+                  Stop Generation
                 </button>
               )}
               
-              {/* Stop Speaking Button */}
-              {isSpeaking && (
+              {/* Start/Stop Speaking Button */}
+              {response && (
                 <button
-                  onClick={stopSpeaking}
-                  className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
+                  onClick={toggleSpeaking}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                    isSpeaking
+                      ? 'bg-orange-500 hover:bg-orange-600 text-white'
+                      : 'bg-green-500 hover:bg-green-600 text-white'
+                  }`}
                 >
-                  <X className="w-4 h-4" />
-                  Stop Speaking
+                  {isSpeaking ? (
+                    <>
+                      <X className="w-4 h-4" />
+                      Stop Speaking
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 className="w-4 h-4" />
+                      Start Speaking
+                    </>
+                  )}
                 </button>
               )}
               
