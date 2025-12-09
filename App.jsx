@@ -31,7 +31,7 @@ export default function VoiceAgent() {
     if (!apiKeys.groq) {
       setStatus('⚠️ Groq API key not configured');
     } else if (apiKeys.murf) {
-      setStatus('Ready (GROQ + MURF Falcon)');
+      setStatus('Ready (GROQ + MURF Voice)');
     } else {
       setStatus('Ready (GROQ)');
     }
@@ -63,7 +63,7 @@ export default function VoiceAgent() {
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = false;
       recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
+      recognitionRef.current.lang = 'en-IN';
 
       recognitionRef.current.onresult = (event) => {
         const current = event.resultIndex;
@@ -294,55 +294,64 @@ export default function VoiceAgent() {
 
   const speakWithMurf = async (text) => {
     try {
-      // Using Murf's Falcon streaming API for real-time conversational AI
-      const response = await fetch('https://api.murf.ai/v1/speech/generate-streaming', {
+      // Using Murf's Gen2 API endpoint
+      const response = await fetch('https://api.murf.ai/v1/speech/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'api-key': apiKeys.murf
         },
         body: JSON.stringify({
-          voiceId: 'en-IN-kavya',  // Indian English female voice for Falcon
+          voiceId: '	en-IN-priya',  // Using a valid Gen2 voice ID
+          style: 'Conversational',
           text: text,
-          modelVersion: 'FALCON',
-          audioFormat: 'MP3',
+          rate: 0,
+          pitch: 0,
           sampleRate: 24000,
-          speed: 1.0,
-          pitch: 0
+          format: 'MP3',
+          channelType: 'MONO',
+          pronunciationDictionary: {},
+          encodeAsBase64: false,
+          variation: 1,
+          modelVersion: 'GEN2'
         })
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.warn('Murf Falcon API failed:', response.status, errorText);
+        console.warn('Murf API failed:', response.status, errorText);
         return false;
       }
 
-      // Falcon returns streaming audio blob
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
+      // Parse response
+      const data = await response.json();
+      
+      // Murf Gen2 returns audioFile URL
+      if (!data.audioFile) {
+        console.warn('No audio file in Murf response:', data);
+        return false;
+      }
+
+      const audio = new Audio(data.audioFile);
       audioRef.current = audio;
       
       audio.onended = () => {
         setIsSpeaking(false);
-        setStatus('Ready (GROQ + MURF Falcon)');
-        URL.revokeObjectURL(audioUrl);
+        setStatus('Ready (GROQ)');
         audioRef.current = null;
       };
       
       audio.onerror = (e) => {
-        console.error('Murf Falcon audio playback error:', e);
+        console.error('Audio playback error:', e);
         setIsSpeaking(false);
         setStatus('Ready (GROQ)');
-        URL.revokeObjectURL(audioUrl);
         audioRef.current = null;
       };
       
       await audio.play();
       return true;
     } catch (error) {
-      console.error('Murf Falcon API error:', error);
+      console.error('Murf API error:', error);
       return false;
     }
   };
